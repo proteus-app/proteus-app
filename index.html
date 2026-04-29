@@ -930,7 +930,7 @@ function loadApp(user) {
   fetchBookings();
   fetchMessages();
   handleMetaCallback();
-  checkMetaToken();
+  checkMetaToken().then(() => { if (window.metaIgId) fetchAudienceDemographics(); });
 }
 
 // NAV
@@ -1386,6 +1386,7 @@ async function fetchMetaInsights(igId, pageToken) {
     
     // Store for metric switching
     window.metaInsightsCache = { igId, pageToken, since, until };
+    fetchAudienceDemographics();
     
   } catch(e) {
     console.error('fetchMetaInsights error:', e);
@@ -1671,6 +1672,74 @@ async function fetchMetaChartData(igId, token, metric, days) {
     }
   } catch(e) {
     console.error('Meta chart error:', e);
+  }
+}
+
+
+// COUNTRY CODE TO NAME MAP
+const COUNTRY_NAMES = {
+  'GB':'UK','US':'USA','IN':'India','BR':'Brazil','ID':'Indonesia','PK':'Pakistan',
+  'RU':'Russia','UZ':'Uzbekistan','NG':'Nigeria','MY':'Malaysia','TR':'Turkey',
+  'MX':'Mexico','AR':'Argentina','VN':'Vietnam','PH':'Philippines','IR':'Iran',
+  'IQ':'Iraq','ES':'Spain','MA':'Morocco','SA':'Saudi Arabia','BD':'Bangladesh',
+  'EG':'Egypt','DE':'Germany','FR':'France','IT':'Italy','PL':'Poland',
+  'ZA':'South Africa','KE':'Kenya','TH':'Thailand','CO':'Colombia','PE':'Peru',
+  'VE':'Venezuela','GT':'Guatemala','CR':'Costa Rica','EC':'Ecuador','SE':'Sweden',
+  'UA':'Ukraine','BG':'Bulgaria','JP':'Japan','JO':'Jordan','KZ':'Kazakhstan',
+  'TN':'Tunisia','DZ':'Algeria','NP':'Nepal','RO':'Romania'
+};
+
+async function fetchAudienceDemographics() {
+  if (!window.metaIgId || !window.metaPageToken) return;
+  try {
+    // Countries
+    const countryRes = await fetch(`https://graph.facebook.com/v19.0/${window.metaIgId}/insights?metric=follower_demographics&period=lifetime&breakdown=country&metric_type=total_value&access_token=${window.metaPageToken}`);
+    const countryData = await countryRes.json();
+    
+    if (countryData.data?.[0]?.total_value?.breakdowns?.[0]?.results) {
+      const results = countryData.data[0].total_value.breakdowns[0].results;
+      const sorted = results.sort((a,b) => b.value - a.value).slice(0, 5);
+      const total = sorted.reduce((s,r) => s + r.value, 0);
+      const labels = sorted.map(r => COUNTRY_NAMES[r.dimension_values[0]] || r.dimension_values[0]);
+      const values = sorted.map(r => Math.round((r.value / total) * 100));
+      buildPie('chart-countries', 'countries-legend', 'countries-placeholder', labels, values);
+    }
+
+    // Age & Gender
+    const ageRes = await fetch(`https://graph.facebook.com/v19.0/${window.metaIgId}/insights?metric=follower_demographics&period=lifetime&breakdown=age,gender&metric_type=total_value&access_token=${window.metaPageToken}`);
+    const ageData = await ageRes.json();
+    
+    if (ageData.data?.[0]?.total_value?.breakdowns?.[0]?.results) {
+      const results = ageData.data[0].total_value.breakdowns[0].results;
+      
+      // Aggregate by age
+      const ageBuckets = {};
+      const genderBuckets = { M: 0, F: 0, U: 0 };
+      
+      results.forEach(r => {
+        const age = r.dimension_values[0];
+        const gender = r.dimension_values[1];
+        ageBuckets[age] = (ageBuckets[age] || 0) + r.value;
+        if (genderBuckets[gender] !== undefined) genderBuckets[gender] += r.value;
+      });
+      
+      // Age pie
+      const ageTotal = Object.values(ageBuckets).reduce((s,v) => s+v, 0);
+      const ageLabels = Object.keys(ageBuckets).sort();
+      const ageValues = ageLabels.map(k => Math.round((ageBuckets[k] / ageTotal) * 100));
+      buildPie('chart-age', 'age-legend', 'age-placeholder', ageLabels, ageValues);
+      
+      // Gender pie
+      const genderTotal = Object.values(genderBuckets).reduce((s,v) => s+v, 0);
+      const genderLabels = ['Male', 'Female', 'Other'].filter((_,i) => [genderBuckets.M, genderBuckets.F, genderBuckets.U][i] > 0);
+      const genderValues = [genderBuckets.M, genderBuckets.F, genderBuckets.U]
+        .filter(v => v > 0)
+        .map(v => Math.round((v / genderTotal) * 100));
+      buildPie('chart-gender', 'gender-legend', 'gender-placeholder', genderLabels, genderValues);
+    }
+    
+  } catch(e) {
+    console.error('Audience demographics error:', e);
   }
 }
 

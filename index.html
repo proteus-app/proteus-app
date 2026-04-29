@@ -405,13 +405,18 @@
       <div class="grid-2">
         <div class="card">
           <div class="section-title">🔗 Connect Your Platforms</div>
-          <div class="connect-banner">
+          
+          <!-- META CONNECT -->
+          <div class="connect-banner" id="meta-connect-banner">
             <div class="connect-banner-icon">📱</div>
             <div class="connect-banner-text">
-              <strong>Instagram & Facebook</strong>
-              Coming soon — your Proteus team will connect this for you
+              <strong id="meta-connect-status">Instagram & Facebook</strong>
+              <span id="meta-connect-sub">Connect your Meta account to see live stats</span>
             </div>
+            <a href="https://www.facebook.com/dialog/oauth?client_id=1504294024547758&display=page&extras={"setup":{"channel":"IG_API_ONBOARDING"}}&redirect_uri=https://proteus-app.vercel.app&response_type=token&scope=instagram_basic,instagram_manage_insights,instagram_content_publish,pages_show_list,pages_read_engagement,ads_read" id="meta-connect-btn" class="btn btn-yellow" style="font-size:12px;padding:8px 14px;white-space:nowrap;text-decoration:none">Connect Meta</a>
           </div>
+
+          <!-- TIKTOK CONNECT -->
           <div class="connect-banner">
             <div class="connect-banner-icon">🎵</div>
             <div class="connect-banner-text">
@@ -423,7 +428,7 @@
             <div class="connect-banner-icon">📢</div>
             <div class="connect-banner-text">
               <strong>Meta Ads</strong>
-              Coming soon — your Proteus team will connect this for you
+              Auto-connected once Meta is linked above
             </div>
           </div>
         </div>
@@ -447,12 +452,13 @@
 
       <!-- META SECTION -->
       <div id="social-meta">
-        <div class="connect-banner" style="margin-bottom:1.5rem">
+        <div class="connect-banner" id="meta-perf-banner" style="margin-bottom:1.5rem">
           <div class="connect-banner-icon">🔌</div>
           <div class="connect-banner-text">
-            <strong>Meta not connected yet</strong>
-            Your Proteus team will connect Instagram & Facebook. Once connected you'll see live data here.
+            <strong id="meta-perf-status">Meta not connected yet</strong>
+            <span id="meta-perf-sub">Connect your account to see live Instagram & Facebook data</span>
           </div>
+          <a href="https://www.facebook.com/dialog/oauth?client_id=1504294024547758&display=page&extras={"setup":{"channel":"IG_API_ONBOARDING"}}&redirect_uri=https://proteus-app.vercel.app&response_type=token&scope=instagram_basic,instagram_manage_insights,instagram_content_publish,pages_show_list,pages_read_engagement,ads_read" id="meta-perf-btn" class="btn btn-yellow" style="font-size:12px;padding:8px 14px;white-space:nowrap;text-decoration:none">Connect Meta</a>
         </div>
 
         <!-- GRAPH -->
@@ -923,6 +929,8 @@ function loadApp(user) {
   fetchLeads();
   fetchBookings();
   fetchMessages();
+  handleMetaCallback();
+  checkMetaToken();
 }
 
 // NAV
@@ -1261,6 +1269,150 @@ async function sendMessage() {
 }
 
 
+
+
+// META OAUTH TOKEN CAPTURE
+async function handleMetaCallback() {
+  const hash = window.location.hash;
+  if (!hash) return;
+  
+  const params = new URLSearchParams(hash.replace('#', ''));
+  const token = params.get('long_lived_token') || params.get('access_token');
+  
+  if (!token || !currentUser) return;
+  
+  // Save token to Supabase
+  await sb.from('platform_tokens').upsert({
+    user_id: currentUser.id,
+    platform: 'meta',
+    access_token: token
+  });
+  
+  // Clear the hash
+  window.history.replaceState({}, document.title, window.location.pathname);
+  
+  // Update UI
+  updateMetaConnectUI(true);
+  
+  // Fetch Meta data
+  fetchMetaData(token);
+}
+
+function updateMetaConnectUI(connected) {
+  const btn = document.getElementById('meta-connect-btn');
+  const status = document.getElementById('meta-connect-status');
+  const sub = document.getElementById('meta-connect-sub');
+  const perfBtn = document.getElementById('meta-perf-btn');
+  const perfStatus = document.getElementById('meta-perf-status');
+  const perfSub = document.getElementById('meta-perf-sub');
+  
+  if (connected) {
+    if (btn) { btn.textContent = '✓ Connected'; btn.style.background = 'var(--green)'; btn.removeAttribute('href'); }
+    if (status) status.textContent = 'Instagram & Facebook Connected';
+    if (sub) sub.textContent = 'Live data is now showing in your dashboard';
+    if (perfBtn) { perfBtn.textContent = '✓ Connected'; perfBtn.style.background = 'var(--green)'; perfBtn.removeAttribute('href'); }
+    if (perfStatus) perfStatus.textContent = 'Meta Connected';
+    if (perfSub) perfSub.textContent = 'Showing live data';
+  }
+}
+
+async function checkMetaToken() {
+  if (!currentUser) return;
+  const { data } = await sb.from('platform_tokens').select('access_token').eq('user_id', currentUser.id).eq('platform', 'meta').single();
+  if (data?.access_token) {
+    updateMetaConnectUI(true);
+    fetchMetaData(data.access_token);
+  }
+}
+
+async function fetchMetaData(token) {
+  try {
+    // Get pages and Instagram account
+    const res = await fetch(`https://graph.facebook.com/v19.0/me/accounts?fields=id,name,access_token,instagram_business_account&access_token=${token}`);
+    const data = await res.json();
+    
+    if (!data.data || data.data.length === 0) return;
+    
+    const page = data.data[0];
+    const igId = page.instagram_business_account?.id;
+    const pageToken = page.access_token;
+    
+    if (!igId) return;
+    
+    // Get Instagram insights
+    const insightsRes = await fetch(`https://graph.facebook.com/v19.0/${igId}/insights?metric=reach,impressions,profile_views&period=day&access_token=${pageToken}`);
+    const insightsData = await insightsRes.json();
+    
+    if (insightsData.data) {
+      updateDashboardStats(insightsData.data);
+    }
+    
+    // Get follower count
+    const profileRes = await fetch(`https://graph.facebook.com/v19.0/${igId}?fields=followers_count,media_count&access_token=${pageToken}`);
+    const profileData = await profileRes.json();
+    
+    if (profileData.followers_count !== undefined) {
+      updateFollowerStats(profileData);
+    }
+
+    // Store igId and pageToken for chart updates
+    window.metaIgId = igId;
+    window.metaPageToken = pageToken;
+    
+    // Update charts with real data
+    fetchMetaChartData(igId, pageToken, 'views', 7);
+    
+  } catch(e) {
+    console.error('Meta fetch error:', e);
+  }
+}
+
+function updateDashboardStats(insights) {
+  insights.forEach(metric => {
+    const latest = metric.values?.[metric.values.length - 1]?.value || 0;
+    if (metric.name === 'reach') {
+      const el = document.querySelector('.stat-card .stat-value');
+      if (el) { el.textContent = latest.toLocaleString('en-GB'); el.style.color = 'var(--yellow)'; }
+    }
+  });
+}
+
+function updateFollowerStats(profile) {
+  // Update follower count display
+  const cards = document.querySelectorAll('.stat-card');
+  cards.forEach(card => {
+    const label = card.querySelector('.stat-label');
+    if (label && label.textContent === 'Total Reach') {
+      const val = card.querySelector('.stat-value');
+      if (val) val.textContent = profile.followers_count.toLocaleString('en-GB');
+    }
+  });
+}
+
+async function fetchMetaChartData(igId, token, metric, days) {
+  // Map our metric names to Instagram API metrics
+  const metricMap = {
+    views: 'reach',
+    interactions: 'likes',
+    follows: 'follower_count',
+    profile_visits: 'profile_views',
+    link_taps: 'website_clicks'
+  };
+  
+  const igMetric = metricMap[metric] || 'reach';
+  
+  try {
+    const res = await fetch(`https://graph.facebook.com/v19.0/${igId}/insights?metric=${igMetric}&period=day&access_token=${token}`);
+    const data = await res.json();
+    // Update chart with real data if available
+    if (data.data?.[0]?.values) {
+      // Chart will be populated with real values
+      console.log('Got real Meta data:', data.data[0].values.length, 'data points');
+    }
+  } catch(e) {
+    console.error('Meta chart error:', e);
+  }
+}
 
 // PIE CHARTS
 function initPieCharts() {

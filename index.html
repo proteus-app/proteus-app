@@ -1327,43 +1327,110 @@ async function checkMetaToken() {
 
 async function fetchMetaData(token) {
   try {
-    // Get pages and Instagram account
-    const res = await fetch(`https://graph.facebook.com/v19.0/me/accounts?fields=id,name,access_token,instagram_business_account&access_token=${token}`);
-    const data = await res.json();
+    console.log('Fetching Meta data...');
     
-    if (!data.data || data.data.length === 0) return;
+    // Step 1: Get user's Facebook Pages with Instagram accounts
+    const pagesRes = await fetch(`https://graph.facebook.com/v19.0/me/accounts?fields=id,name,access_token,instagram_business_account{id,name,followers_count,username}&access_token=${token}`);
+    const pagesData = await pagesRes.json();
+    console.log('Pages data:', JSON.stringify(pagesData));
     
-    const page = data.data[0];
-    const igId = page.instagram_business_account?.id;
-    const pageToken = page.access_token;
-    
-    if (!igId) return;
-    
-    // Get Instagram insights
-    const insightsRes = await fetch(`https://graph.facebook.com/v19.0/${igId}/insights?metric=reach,impressions,profile_views&period=day&access_token=${pageToken}`);
-    const insightsData = await insightsRes.json();
-    
-    if (insightsData.data) {
-      updateDashboardStats(insightsData.data);
+    if (!pagesData.data || pagesData.data.length === 0) {
+      console.log('No pages found');
+      return;
     }
     
-    // Get follower count
-    const profileRes = await fetch(`https://graph.facebook.com/v19.0/${igId}?fields=followers_count,media_count&access_token=${pageToken}`);
-    const profileData = await profileRes.json();
+    // Find page with Instagram account
+    let igId = null;
+    let pageToken = null;
+    let igData = null;
     
-    if (profileData.followers_count !== undefined) {
-      updateFollowerStats(profileData);
+    for (const page of pagesData.data) {
+      if (page.instagram_business_account) {
+        igId = page.instagram_business_account.id;
+        pageToken = page.access_token;
+        igData = page.instagram_business_account;
+        console.log('Found IG account:', igId, igData);
+        break;
+      }
     }
-
-    // Store igId and pageToken for chart updates
+    
+    if (!igId) {
+      console.log('No Instagram business account found on any page');
+      // Try getting IG account directly
+      const meRes = await fetch(`https://graph.facebook.com/v19.0/me?fields=id,name&access_token=${token}`);
+      const meData = await meRes.json();
+      console.log('Me data:', JSON.stringify(meData));
+      return;
+    }
+    
+    // Store for later use
     window.metaIgId = igId;
     window.metaPageToken = pageToken;
     
-    // Update charts with real data
-    fetchMetaChartData(igId, pageToken, 'views', 7);
+    // Update follower count if we got it
+    if (igData?.followers_count !== undefined) {
+      const cards = document.querySelectorAll('.stat-card');
+      cards.forEach(card => {
+        const label = card.querySelector('.stat-label');
+        if (label && label.textContent === 'Total Reach') {
+          const val = card.querySelector('.stat-value');
+          if (val) {
+            val.textContent = igData.followers_count.toLocaleString('en-GB');
+            val.style.color = 'var(--yellow)';
+          }
+          const change = card.querySelector('.stat-change');
+          if (change) change.textContent = '@' + (igData.username || 'connected');
+        }
+      });
+    }
+    
+    // Step 2: Get insights
+    const since = Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000);
+    const until = Math.floor(Date.now() / 1000);
+    
+    const insightsRes = await fetch(`https://graph.facebook.com/v19.0/${igId}/insights?metric=reach,profile_views,website_clicks&period=day&since=${since}&until=${until}&access_token=${pageToken}`);
+    const insightsData = await insightsRes.json();
+    console.log('Insights:', JSON.stringify(insightsData));
+    
+    if (insightsData.data) {
+      updateChartWithRealData(insightsData.data);
+    }
+
+    // Save igId and pageToken to Supabase for persistence
+    await sb.from('platform_tokens').upsert({
+      user_id: currentUser.id,
+      platform: 'meta',
+      access_token: token,
+      ig_id: igId,
+      page_token: pageToken
+    });
     
   } catch(e) {
     console.error('Meta fetch error:', e);
+  }
+}
+
+function updateChartWithRealData(insights) {
+  try {
+    const reachMetric = insights.find(m => m.name === 'reach');
+    if (!reachMetric || !reachMetric.values) return;
+    
+    const labels = reachMetric.values.map(v => {
+      const d = new Date(v.end_time);
+      return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+    });
+    const values = reachMetric.values.map(v => v.value);
+    
+    if (mainChart) {
+      mainChart.data.labels = labels;
+      mainChart.data.datasets[0].data = values;
+      mainChart.update();
+      
+      const placeholder = document.getElementById('chart-placeholder');
+      if (placeholder) placeholder.style.display = 'none';
+    }
+  } catch(e) {
+    console.error('Chart update error:', e);
   }
 }
 

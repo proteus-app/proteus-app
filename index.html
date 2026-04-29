@@ -1744,54 +1744,42 @@ async function fetchAudienceDemographics() {
 }
 
 // PIE CHARTS
+const PIE_COLORS = ['#ffd700','#4a9eff','#00c97a','#ff4444','#a78bfa','#fb923c'];
+const PIE_DEFAULTS = {
+  responsive: true, maintainAspectRatio: false,
+  plugins: {
+    legend: { display: false },
+    tooltip: {
+      backgroundColor: '#1a1a1a', borderColor: '#2f2f2f', borderWidth: 1,
+      titleColor: '#fff', bodyColor: '#888', padding: 10,
+      callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed}%` }
+    }
+  },
+  cutout: '60%'
+};
+
+function buildPie(id, legendId, placeholderId, labels, data) {
+  const placeholder = document.getElementById(placeholderId);
+  const legendEl = document.getElementById(legendId);
+  if (!labels.length || !document.getElementById(id)) return;
+  if (placeholder) placeholder.style.display = 'none';
+  const ctx = document.getElementById(id).getContext('2d');
+  new Chart(ctx, {
+    type: 'doughnut',
+    data: { labels, datasets: [{ data, backgroundColor: PIE_COLORS.slice(0, data.length), borderWidth: 0, hoverOffset: 4 }] },
+    options: PIE_DEFAULTS
+  });
+  if (legendEl) legendEl.innerHTML = labels.map((l, i) =>
+    `<div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-secondary)">
+      <div style="width:8px;height:8px;border-radius:50%;background:${PIE_COLORS[i]};flex-shrink:0"></div>
+      <span>${l}</span>
+      <span style="margin-left:auto;color:var(--white);font-weight:500">${data[i]}%</span>
+    </div>`
+  ).join('');
+}
+
 function initPieCharts() {
-  const pieDefaults = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: { display: false },
-      tooltip: {
-        backgroundColor: '#1a1a1a',
-        borderColor: '#2f2f2f',
-        borderWidth: 1,
-        titleColor: '#fff',
-        bodyColor: '#888',
-        padding: 10,
-        callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed}%` }
-      }
-    },
-    cutout: '60%'
-  };
-
-  const COLORS = ['#ffd700','#4a9eff','#00c97a','#ff4444','#a78bfa','#fb923c'];
-
-  function buildPie(id, legendId, placeholderId, labels, data) {
-    const placeholder = document.getElementById(placeholderId);
-    const legendEl = document.getElementById(legendId);
-    if (!labels.length) return;
-    placeholder.style.display = 'none';
-    const ctx = document.getElementById(id).getContext('2d');
-    new Chart(ctx, {
-      type: 'doughnut',
-      data: {
-        labels,
-        datasets: [{ data, backgroundColor: COLORS.slice(0, data.length), borderWidth: 0, hoverOffset: 4 }]
-      },
-      options: pieDefaults
-    });
-    legendEl.innerHTML = labels.map((l, i) =>
-      `<div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-secondary)">
-        <div style="width:8px;height:8px;border-radius:50%;background:${COLORS[i]};flex-shrink:0"></div>
-        <span>${l}</span>
-        <span style="margin-left:auto;color:var(--white);font-weight:500">${data[i]}%</span>
-      </div>`
-    ).join('');
-  }
-
-  // Placeholder data — will be replaced with live API data once platforms connected
-  // buildPie('chart-countries', 'countries-legend', 'countries-placeholder', ['UK','US','Ireland','Australia','Canada'], [42,28,12,10,8]);
-  // buildPie('chart-age', 'age-legend', 'age-placeholder', ['18-24','25-34','35-44','45-54','55+'], [22,38,24,11,5]);
-  // buildPie('chart-gender', 'gender-legend', 'gender-placeholder', ['Female','Male','Other'], [54,44,2]);
+  // Placeholder only — real data loaded via fetchAudienceDemographics
 }
 
 setTimeout(initPieCharts, 600);

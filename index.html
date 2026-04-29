@@ -1349,13 +1349,13 @@ async function saveAndUseLongLivedToken(token) {
 
 async function fetchMetaInsights(igId, pageToken) {
   try {
-    const since = Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000);
+    const days = parseInt(document.getElementById('period-select')?.value || 7);
     const until = Math.floor(Date.now() / 1000);
+    const since = until - (days * 24 * 60 * 60);
     
     // Get profile info
     const profileRes = await fetch(`https://graph.facebook.com/v19.0/${igId}?fields=followers_count,username,media_count&access_token=${pageToken}`);
     const profileData = await profileRes.json();
-    console.log('Profile:', JSON.stringify(profileData));
     
     if (profileData.followers_count !== undefined) {
       const cards = document.querySelectorAll('.stat-card');
@@ -1370,15 +1370,48 @@ async function fetchMetaInsights(igId, pageToken) {
       });
     }
     
-    // Get insights
-    const insightsRes = await fetch(`https://graph.facebook.com/v19.0/${igId}/insights?metric=reach,profile_views&period=day&since=${since}&until=${until}&access_token=${pageToken}`);
+    // Get reach insights with correct timestamp format
+    const insightsRes = await fetch(`https://graph.facebook.com/v19.0/${igId}/insights?metric=reach&period=day&since=${since}&until=${until}&access_token=${pageToken}`);
     const insightsData = await insightsRes.json();
-    console.log('Insights:', JSON.stringify(insightsData));
+    console.log('Insights response:', JSON.stringify(insightsData));
     
-    if (insightsData.data) updateChartWithRealData(insightsData.data);
+    if (insightsData.data) {
+      updateChartWithRealData(insightsData.data);
+    }
+    
+    // Get follower count trend separately
+    const followsRes = await fetch(`https://graph.facebook.com/v19.0/${igId}/insights?metric=follower_count&period=day&since=${since}&until=${until}&access_token=${pageToken}`);
+    const followsData = await followsRes.json();
+    console.log('Follows response:', JSON.stringify(followsData));
+    
+    // Store for metric switching
+    window.metaInsightsCache = { igId, pageToken, since, until };
     
   } catch(e) {
     console.error('fetchMetaInsights error:', e);
+  }
+}
+
+async function fetchMetricData(metric, days) {
+  if (!window.metaIgId || !window.metaPageToken) return;
+  const until = Math.floor(Date.now() / 1000);
+  const since = until - (days * 24 * 60 * 60);
+  
+  const metricMap = {
+    views: 'reach',
+    follows: 'follower_count',
+    profile_visits: 'profile_views',
+    link_taps: 'website_clicks'
+  };
+  
+  const igMetric = metricMap[metric] || 'reach';
+  
+  try {
+    const res = await fetch(`https://graph.facebook.com/v19.0/${window.metaIgId}/insights?metric=${igMetric}&period=day&since=${since}&until=${until}&access_token=${window.metaPageToken}`);
+    const data = await res.json();
+    if (data.data) updateChartWithRealData(data.data);
+  } catch(e) {
+    console.error('fetchMetricData error:', e);
   }
 }
 
@@ -1454,6 +1487,8 @@ async function fetchMetaData(token) {
     }
 
     // Save igId and pageToken to Supabase for persistence
+    window.metaIgId = igId;
+    window.metaPageToken = pageToken;
     await sb.from('platform_tokens').upsert({
       user_id: currentUser.id,
       platform: 'meta',
@@ -1461,6 +1496,9 @@ async function fetchMetaData(token) {
       ig_id: igId,
       page_token: pageToken
     });
+    
+    // Now fetch insights
+    fetchMetaInsights(igId, pageToken);
     
   } catch(e) {
     console.error('Meta fetch error:', e);
@@ -1638,6 +1676,12 @@ function getDateLabels(days) {
 function updateChart() {
   const metric = document.getElementById('metric-select').value;
   const days = parseInt(document.getElementById('period-select').value);
+  
+  // If Meta is connected, fetch real data
+  if (window.metaIgId && window.metaPageToken) {
+    fetchMetricData(metric, days);
+  }
+  
   const config = CHART_METRICS[metric];
   const labels = getDateLabels(days);
 

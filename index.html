@@ -1318,10 +1318,67 @@ function updateMetaConnectUI(connected) {
 
 async function checkMetaToken() {
   if (!currentUser) return;
-  const { data } = await sb.from('platform_tokens').select('access_token').eq('user_id', currentUser.id).eq('platform', 'meta').single();
-  if (data?.access_token) {
-    updateMetaConnectUI(true);
-    fetchMetaData(data.access_token);
+  try {
+    const { data } = await sb.from('platform_tokens').select('access_token,ig_id,page_token').eq('user_id', currentUser.id).eq('platform', 'meta').maybeSingle();
+    if (data?.access_token) {
+      updateMetaConnectUI(true);
+      // If we have stored ig_id and page_token use those directly
+      if (data.ig_id && data.page_token) {
+        window.metaIgId = data.ig_id;
+        window.metaPageToken = data.page_token;
+        fetchMetaInsights(data.ig_id, data.page_token);
+      } else {
+        fetchMetaData(data.access_token);
+      }
+    }
+  } catch(e) {
+    console.error('checkMetaToken error:', e);
+  }
+}
+
+async function saveAndUseLongLivedToken(token) {
+  if (!currentUser) return;
+  await sb.from('platform_tokens').upsert({
+    user_id: currentUser.id,
+    platform: 'meta',
+    access_token: token
+  });
+  updateMetaConnectUI(true);
+  fetchMetaData(token);
+}
+
+async function fetchMetaInsights(igId, pageToken) {
+  try {
+    const since = Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000);
+    const until = Math.floor(Date.now() / 1000);
+    
+    // Get profile info
+    const profileRes = await fetch(`https://graph.facebook.com/v19.0/${igId}?fields=followers_count,username,media_count&access_token=${pageToken}`);
+    const profileData = await profileRes.json();
+    console.log('Profile:', JSON.stringify(profileData));
+    
+    if (profileData.followers_count !== undefined) {
+      const cards = document.querySelectorAll('.stat-card');
+      cards.forEach(card => {
+        const label = card.querySelector('.stat-label');
+        if (label && label.textContent === 'Total Reach') {
+          const val = card.querySelector('.stat-value');
+          if (val) { val.textContent = profileData.followers_count.toLocaleString('en-GB'); val.style.color = 'var(--yellow)'; }
+          const change = card.querySelector('.stat-change');
+          if (change) change.textContent = '@' + (profileData.username || 'connected');
+        }
+      });
+    }
+    
+    // Get insights
+    const insightsRes = await fetch(`https://graph.facebook.com/v19.0/${igId}/insights?metric=reach,profile_views&period=day&since=${since}&until=${until}&access_token=${pageToken}`);
+    const insightsData = await insightsRes.json();
+    console.log('Insights:', JSON.stringify(insightsData));
+    
+    if (insightsData.data) updateChartWithRealData(insightsData.data);
+    
+  } catch(e) {
+    console.error('fetchMetaInsights error:', e);
   }
 }
 

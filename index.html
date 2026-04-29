@@ -1394,24 +1394,122 @@ async function fetchMetaInsights(igId, pageToken) {
 
 async function fetchMetricData(metric, days) {
   if (!window.metaIgId || !window.metaPageToken) return;
+  
+  // Cap at 30 days for daily insights (Meta API limitation)
+  const effectiveDays = Math.min(days, 30);
   const until = Math.floor(Date.now() / 1000);
-  const since = until - (days * 24 * 60 * 60);
-  
-  const metricMap = {
-    views: 'reach',
-    follows: 'follower_count',
-    profile_visits: 'profile_views',
-    link_taps: 'website_clicks'
-  };
-  
-  const igMetric = metricMap[metric] || 'reach';
-  
+  const since = until - (effectiveDays * 24 * 60 * 60);
+
   try {
+    if (metric === 'interactions') {
+      await fetchInteractionsData(days);
+      return;
+    }
+
+    const metricMap = {
+      views: 'reach',
+      follows: 'follower_count',
+      profile_visits: 'profile_views',
+      link_taps: 'website_clicks'
+    };
+
+    const igMetric = metricMap[metric] || 'reach';
+
     const res = await fetch(`https://graph.facebook.com/v19.0/${window.metaIgId}/insights?metric=${igMetric}&period=day&since=${since}&until=${until}&access_token=${window.metaPageToken}`);
     const data = await res.json();
     if (data.data) updateChartWithRealData(data.data);
+    
+    // For views, also try to get follower vs non-follower breakdown
+    if (metric === 'views') {
+      fetchReachBreakdown(since, until);
+    }
   } catch(e) {
     console.error('fetchMetricData error:', e);
+  }
+}
+
+async function fetchReachBreakdown(since, until) {
+  try {
+    const res = await fetch(`https://graph.facebook.com/v19.0/${window.metaIgId}/insights?metric=reach&period=day&since=${since}&until=${until}&breakdown=follow_type&access_token=${window.metaPageToken}`);
+    const data = await res.json();
+    if (!data.data) return;
+    
+    // Extract follower vs non-follower data
+    let followerVals = [];
+    let nonFollowerVals = [];
+    let labels = [];
+    
+    data.data.forEach(metric => {
+      if (metric.total_value?.breakdowns) {
+        metric.total_value.breakdowns.forEach(bd => {
+          bd.results.forEach(r => {
+            if (r.dimension_values?.[0] === 'FOLLOWER') followerVals.push(r.value);
+            if (r.dimension_values?.[0] === 'NON_FOLLOWER') nonFollowerVals.push(r.value);
+          });
+        });
+      }
+    });
+    
+    if (mainChart && followerVals.length > 0) {
+      mainChart.data.datasets[0].data = followerVals;
+      if (mainChart.data.datasets[1]) mainChart.data.datasets[1].data = nonFollowerVals;
+      mainChart.update();
+    }
+  } catch(e) {
+    console.error('Reach breakdown error:', e);
+  }
+}
+
+async function fetchInteractionsData(days) {
+  try {
+    // Get all media and aggregate by date
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    
+    const res = await fetch(`https://graph.facebook.com/v19.0/${window.metaIgId}/media?fields=id,timestamp,like_count,comments_count,shares_count,saved_count&limit=50&access_token=${window.metaPageToken}`);
+    const data = await res.json();
+    if (!data.data) return;
+    
+    // Build date buckets
+    const buckets = {};
+    for (let i = 0; i < days; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().split('T')[0];
+      buckets[key] = { likes: 0, comments: 0, shares: 0, saves: 0 };
+    }
+    
+    // Only include posts within the time window
+    data.data.forEach(post => {
+      const postDate = new Date(post.timestamp);
+      if (postDate < cutoff) return;
+      const key = postDate.toISOString().split('T')[0];
+      if (buckets[key]) {
+        buckets[key].likes += post.like_count || 0;
+        buckets[key].comments += post.comments_count || 0;
+        buckets[key].shares += post.shares_count || 0;
+        buckets[key].saves += post.saved_count || 0;
+      }
+    });
+    
+    const sortedDates = Object.keys(buckets).sort();
+    const labels = sortedDates.map(d => {
+      const date = new Date(d);
+      return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+    });
+    
+    if (mainChart) {
+      mainChart.data.labels = labels;
+      mainChart.data.datasets[0].data = sortedDates.map(d => buckets[d].likes);
+      if (mainChart.data.datasets[1]) mainChart.data.datasets[1].data = sortedDates.map(d => buckets[d].comments);
+      if (mainChart.data.datasets[2]) mainChart.data.datasets[2].data = sortedDates.map(d => buckets[d].shares);
+      if (mainChart.data.datasets[3]) mainChart.data.datasets[3].data = sortedDates.map(d => buckets[d].saves);
+      mainChart.update();
+      const placeholder = document.getElementById('chart-placeholder');
+      if (placeholder) placeholder.style.display = 'none';
+    }
+  } catch(e) {
+    console.error('fetchInteractionsData error:', e);
   }
 }
 
